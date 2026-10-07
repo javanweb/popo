@@ -1,0 +1,22 @@
+[
+  {
+    "id": "sms-1791189557294-m9gm",
+    "recipientPhone": "09139876543",
+    "to": "09139876543",
+    "template": "user_credentials_login",
+    "message": "مهدی قاسمی گرامی، حساب کاربری شما در سامانه هایپر صنعت اطلس با موفقیت فعال گردید.\nنام کاربری: atlas_sanat2\nرمز عبور: 09139876543\nورود: https://atlassanat.ir/login",
+    "status": "sent",
+    "timestamp": "2026-10-05T08:39:17.294Z",
+    "sentAt": "۸:۳۹:۱۷"
+  },
+  {
+    "id": "sms-1791189557267-wyb7",
+    "recipientPhone": "09123456780",
+    "to": "09123456780",
+    "template": "user_credentials_login",
+    "message": "رضا محمدی گرامی، حساب کاربری شما در سامانه هایپر صنعت اطلس با موفقیت فعال گردید.\nنام کاربری: atlas_sanat\nرمز عبور: 09123456780\nورود: https://atlassanat.ir/login",
+    "status": "sent",
+    "timestamp": "2026-10-05T08:39:17.267Z",
+    "sentAt": "۸:۳۹:۱۷"
+  }
+]
