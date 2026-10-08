@@ -11,6 +11,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { ParticleAvatar, ParticleAvatarRef } from './ParticleAvatar';
+import { apiUrl } from '../../config/apiConfig';
 import './style.css';
 
 interface AiForzaCallExperienceProps {
@@ -229,7 +230,7 @@ export const AiForzaCallExperience: React.FC<AiForzaCallExperienceProps> = ({ on
       setStatus('speaking');
       setTurn('ai');
       try {
-        const res = await fetch('/api/ai/tts', {
+        const res = await fetch(apiUrl('/api/ai/tts'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
@@ -268,7 +269,7 @@ export const AiForzaCallExperience: React.FC<AiForzaCallExperienceProps> = ({ on
       activeTranscriptRef.current = '';
 
       try {
-        const res = await fetch('/api/ai/forza-live', {
+        const res = await fetch(apiUrl('/api/ai/forza-live'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

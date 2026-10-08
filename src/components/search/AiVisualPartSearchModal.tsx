@@ -65,32 +65,39 @@ interface AnalysisPhase {
 
 const ANALYSIS_PHASES: AnalysisPhase[] = [
   {
-    title: 'اسکن هندسه مقطع و دندانه‌ها',
-    en: 'GEOMETRY SCAN',
+    title: 'در حال بررسی تصویر...',
+    en: 'VALIDATING IMAGE',
     icon: Scan,
-    tag: 'هندسه و مقطع',
-    detail: 'بررسی عمق و زاویه شیار',
+    tag: 'اعتبارسنجی',
+    detail: 'بررسی نوع واقعی فایل، حجم و کیفیت تصویر',
   },
   {
-    title: 'محاسبه گام و ابعاد استاندارد',
-    en: 'PITCH & DIMENSIONS',
-    icon: Ruler,
-    tag: 'گام و ابعاد',
-    detail: 'اندازه‌گیری گام برحسب میلیمتر',
+    title: 'در حال ذخیره تصویر...',
+    en: 'UPLOADING TO GITHUB',
+    icon: UploadCloud,
+    tag: 'بارگذاری عمومی تصویر',
+    detail: 'پس از فعال‌شدن شناسایی، ثبت تصویر در مخزن عمومی GitHub',
   },
   {
-    title: 'تشخیص ساختار و نوع متریال',
-    en: 'MATERIAL IDENTIFICATION',
-    icon: Layers,
-    tag: 'نوع متریال',
-    detail: 'تشخیص پلی‌یورتان یا لاستیک',
+    title: 'در حال شناسایی قطعه...',
+    en: 'AI PART RECOGNITION',
+    icon: Sparkles,
+    tag: 'شناسایی قطعه',
+    detail: 'بررسی دسترسی و قرارداد دریافت URL عمومی در Worker',
   },
   {
-    title: 'انطباق با کاتالوگ قطعات اطلس',
-    en: 'CATALOG MATCHING',
+    title: 'در حال جستجو در کاتالوگ...',
+    en: 'CATALOG SEARCH',
     icon: Cpu,
-    tag: 'کاتالوگ اطلس',
-    detail: 'بررسی موجودی و کدهای معادل',
+    tag: 'جستجوی کاتالوگ',
+    detail: 'تطبیق کد، برند، نوع و مشخصات فنی',
+  },
+  {
+    title: 'در انتظار پاسخ نهایی سرویس...',
+    en: 'WAITING FOR API RESPONSE',
+    icon: Activity,
+    tag: 'دریافت پاسخ',
+    detail: 'درخواست ارسال شده است؛ نتیجهٔ شناسایی و جستجوی کاتالوگ در راه است',
   },
 ];
 
@@ -105,26 +112,37 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   // Form states
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [mimeType, setMimeType] = useState<string>('image/jpeg');
+  const [imageFileName, setImageFileName] = useState<string>('image.jpg');
   const [length, setLength] = useState<string>('');
 
   // Dynamic scanning simulation state while analyzing
   const [analysisProgress, setAnalysisProgress] = useState<number>(18);
   const [analysisPhaseIndex, setAnalysisPhaseIndex] = useState<number>(0);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState<number>(0);
+  const isAwaitingAnalysisResponse = analysisProgress >= 94;
 
   React.useEffect(() => {
     if (currentStep !== 'analyzing') {
       setAnalysisProgress(18);
       setAnalysisPhaseIndex(0);
+      setAnalysisElapsedSeconds(0);
       return;
     }
 
+    let progress = 18;
+    let phaseIndex = 0;
+    let elapsed = 0;
     const interval = setInterval(() => {
-      setAnalysisProgress(prev => {
-        if (prev >= 94) return 94;
-        const jump = Math.floor(Math.random() * 7) + 5;
-        return Math.min(prev + jump, 94);
-      });
-      setAnalysisPhaseIndex(prev => (prev + 1) % ANALYSIS_PHASES.length);
+      elapsed += 1;
+      setAnalysisElapsedSeconds(elapsed);
+      if (progress >= 94) return;
+      const jump = Math.floor(Math.random() * 7) + 5;
+      progress = Math.min(progress + jump, 94);
+      setAnalysisProgress(progress);
+      phaseIndex = progress >= 94
+        ? ANALYSIS_PHASES.length - 1
+        : Math.min(phaseIndex + 1, ANALYSIS_PHASES.length - 2);
+      setAnalysisPhaseIndex(phaseIndex);
     }, 1000);
 
     return () => clearInterval(interval);
@@ -143,6 +161,8 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   // Analysis result & error
   const [analysisResult, setAnalysisResult] = useState<AiPartAnalysisResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [failedUploadInfo, setFailedUploadInfo] = useState<AiPartAnalysisResult['uploadedImage'] | null>(null);
+  const [canRetryFailedAnalysis, setCanRetryFailedAnalysis] = useState<boolean>(false);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [showSimilar, setShowSimilar] = useState<boolean>(false);
 
@@ -180,9 +200,21 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   const handleFile = async (file: File) => {
     try {
       setErrorMessage('');
+      setFailedUploadInfo(null);
+      setCanRetryFailedAnalysis(false);
+      const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+      if (!supportedTypes.has(file.type.toLowerCase())) {
+        setErrorMessage('فقط تصویرهای JPG، PNG یا WEBP پذیرفته می‌شوند.');
+        return;
+      }
+      if (file.size > 12 * 1024 * 1024) {
+        setErrorMessage('حجم تصویر نباید بیشتر از ۱۲ مگابایت باشد.');
+        return;
+      }
       const converted = await aiVisualSearchService.fileToBase64(file);
       setSelectedImage(converted.base64);
       setMimeType(converted.mimeType);
+      setImageFileName(file.name || 'image');
       if (isUsingCamera) stopCamera();
     } catch {
       setErrorMessage('خطا در خواندن فایل تصویر. لطفاً تصویر دیگری انتخاب نمایید.');
@@ -200,7 +232,8 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   // Preset sample loader
   const loadPreset = (preset: IndustrialPresetSample) => {
     setSelectedImage(preset.imageUrl);
-    setMimeType('image/jpeg');
+    setMimeType('image/png');
+    setImageFileName(`${preset.id}.png`);
     setLength(preset.length.toString());
     setWidth(preset.width.toString());
     if (preset.pitch) setPitch(preset.pitch.toString());
@@ -208,6 +241,8 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
     setApplication(preset.application);
     setFeatures(preset.features);
     setErrorMessage('');
+    setFailedUploadInfo(null);
+    setCanRetryFailedAnalysis(false);
     if (isUsingCamera) stopCamera();
     // Move to step 2 directly with preset data for quick flow
     setCurrentStep(2);
@@ -251,7 +286,10 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         setSelectedImage(dataUrl);
+        setFailedUploadInfo(null);
+        setCanRetryFailedAnalysis(false);
         setMimeType('image/jpeg');
+        setImageFileName('camera-capture.jpg');
         stopCamera();
       }
     }
@@ -261,6 +299,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   const resetForm = () => {
     stopCamera();
     setSelectedImage(null);
+    setImageFileName('image.jpg');
     setLength('');
     setWidth('');
     setPitch('');
@@ -268,6 +307,8 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
     setFeatures('');
     setAnalysisResult(null);
     setErrorMessage('');
+    setFailedUploadInfo(null);
+    setCanRetryFailedAnalysis(false);
     setPendingStage('refined');
     setLastStage('refined');
     setCurrentStep(1);
@@ -289,7 +330,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   };
 
   // Submit to AI (two-stage: quick = image only, refined = image + dims + application)
-  const handleAnalyze = async (stage: AiAnalysisStage = 'refined') => {
+  const handleAnalyze = async (stage: AiAnalysisStage = 'refined', reuseUploadedImage = false) => {
     if (!selectedImage && !length && !width) {
       setErrorMessage('لطفاً حداقل تصویر قطعه یا ابعاد (طول و عرض) را مشخص فرمایید.');
       return;
@@ -300,13 +341,23 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
     }
 
     setErrorMessage('');
+    setFailedUploadInfo(null);
+    setCanRetryFailedAnalysis(false);
     setPendingStage(stage);
     setCurrentStep('analyzing');
 
     try {
       const result = await aiVisualSearchService.analyzePartWithAi({
         imageBase64: selectedImage || undefined,
-        mimeType: mimeType,
+        mimeType,
+        fileName: imageFileName,
+        retryUpload: reuseUploadedImage && failedUploadInfo?.retryReceipt ? {
+          imageName: failedUploadInfo.imageName,
+          imageUrl: failedUploadInfo.imageUrl,
+          githubUrl: failedUploadInfo.githubUrl,
+          commitUrl: failedUploadInfo.commitUrl,
+          retryReceipt: failedUploadInfo.retryReceipt,
+        } : undefined,
         length: length ? parseFloat(length) : undefined,
         width: width ? parseFloat(width) : undefined,
         pitch: pitch ? parseFloat(pitch) : undefined,
@@ -319,7 +370,10 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
       setLastStage(result.stage || stage);
       setCurrentStep('results');
     } catch (err: any) {
-      console.error(err);
+      console.error('[AI part analysis] request failed:', err?.message || 'unknown error');
+      setLastStage(stage);
+      if (err?.uploadedImage?.imageUrl) setFailedUploadInfo(err.uploadedImage);
+      setCanRetryFailedAnalysis(Boolean(err?.retryable));
       setErrorMessage(err.message || 'خطا در ارتباط با سامانه تحلیل هوش مصنوعی.');
       setCurrentStep(stage === 'quick' ? 1 : 3);
     }
@@ -328,7 +382,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
   // Resolve a match image that may be a bare catalog filename (e.g. "e(001).png")
   const resolveMatchImage = (match: any, catalogItem: any): string => {
     const raw: string =
-      (catalogItem?.images && catalogItem.images[0]) || catalogItem?.image || match?.image || '';
+      (catalogItem?.images && catalogItem.images[0]) || catalogItem?.image || match?.imageUrl || match?.image || '';
     if (raw && /^e\(\d+\)\.png$/i.test(raw.trim())) {
       return getProductImageUrl(raw.trim());
     }
@@ -455,9 +509,23 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
 
         {/* Error notification banner */}
         {errorMessage && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-            <span className="font-medium">{errorMessage}</span>
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-medium">{errorMessage}</p>
+              {failedUploadInfo?.imageUrl && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <a href={failedUploadInfo.imageUrl} target="_blank" rel="noopener noreferrer" className="underline font-bold">
+                    تصویر در GitHub ذخیره شده؛ مشاهدهٔ لینک
+                  </a>
+                  {canRetryFailedAnalysis && failedUploadInfo.retryReceipt && (
+                    <button type="button" onClick={() => void handleAnalyze(lastStage, true)} className="font-black underline text-red-800">
+                      تلاش مجدد شناسایی بدون آپلود دوباره
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -522,6 +590,9 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                   <span className="text-xs text-slate-400 mt-1">
                     پشتیبانی از انواع فرمت‌های JPG، PNG و WEBP
                   </span>
+                  <div className="mt-3 max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-right text-[10px] leading-relaxed text-amber-900">
+                    برای شناسایی، عکس به‌صورت عمومی در مخزن GitHub ذخیره می‌شود و لینک آن برای همه قابل‌دسترسی است. از ارسال تصویر حاوی چهره، پلاک، اطلاعات تماس یا اسناد محرمانه خودداری کنید.
+                  </div>
 
                   <div className="mt-5 pt-4 border-t border-slate-200 w-full max-w-xs flex justify-center">
                     <button
@@ -997,8 +1068,15 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="px-3 py-1 rounded-full bg-orange-50 border border-orange-200/80 text-[#C95210] text-xs font-bold font-mono shadow-2xs">
-                      {toPersianDigits(analysisProgress)}٪ در حال بررسی
+                    <div className="px-3 py-1 rounded-full bg-orange-50 border border-orange-200/80 text-[#C95210] text-xs font-bold shadow-2xs flex items-center gap-1.5">
+                      {isAwaitingAnalysisResponse ? (
+                        <>
+                          <Activity className="w-3.5 h-3.5 animate-pulse" />
+                          <span>در حال دریافت پاسخ سرویس · {toPersianDigits(analysisElapsedSeconds)} ثانیه</span>
+                        </>
+                      ) : (
+                        <span className="font-mono">{toPersianDigits(analysisProgress)}٪ در حال بررسی</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1071,8 +1149,11 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                 <div className="w-full h-1.5 bg-slate-100 overflow-hidden">
                   <motion.div
                     className="h-full bg-gradient-to-r from-orange-400 via-amber-400 to-emerald-500"
-                    style={{ width: `${analysisProgress}%` }}
-                    transition={{ ease: 'easeOut', duration: 0.3 }}
+                    style={{ width: isAwaitingAnalysisResponse ? '32%' : `${analysisProgress}%` }}
+                    animate={isAwaitingAnalysisResponse ? { x: ['-100%', '400%'] } : { x: 0 }}
+                    transition={isAwaitingAnalysisResponse
+                      ? { duration: 1.2, repeat: Infinity, ease: 'linear' }
+                      : { ease: 'easeOut', duration: 0.3 }}
                   />
                 </div>
 
@@ -1084,12 +1165,12 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                       <span>{ANALYSIS_PHASES[analysisPhaseIndex].title}</span>
                     </span>
                     <span className="text-slate-500 text-[11px] font-medium bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200/60">
-                      مرحله {toPersianDigits(analysisPhaseIndex + 1)} از ۴
+                      مرحله {toPersianDigits(analysisPhaseIndex + 1)} از {toPersianDigits(ANALYSIS_PHASES.length)}
                     </span>
                   </div>
 
                   {/* 4 Fresh Delightful Step Badges */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                     {ANALYSIS_PHASES.map((phase, idx) => {
                       const isCurrent = idx === analysisPhaseIndex;
                       const isDone = idx < analysisPhaseIndex;
@@ -1147,7 +1228,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                 <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
                   <div className="space-y-1">
-                    <span className="font-bold block">حالت تطبیق مهندسی (بدون هوش مصنوعی)</span>
+                    <span className="font-bold block">پیشنهاد سریع از کاتالوگ — بدون تأیید هوش مصنوعی</span>
                     <span className="leading-relaxed block">{analysisResult.fallbackNotice}</span>
                     {analysisResult.aiError && (
                       <span className="block text-[10px] text-amber-700 font-mono" dir="ltr">
@@ -1188,9 +1269,13 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>ضریب اطمینان: {toPersianDigits(analysisResult.summary.confidence)}٪</span>
+                    <span className={`${analysisResult.summary.confidence > 0 ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' : 'bg-amber-500/20 border-amber-400/40 text-amber-200'} border px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5`}>
+                      {analysisResult.summary.confidence > 0
+                        ? <CheckCircle2 className="w-3.5 h-3.5" />
+                        : <AlertCircle className="w-3.5 h-3.5" />}
+                      <span>{analysisResult.summary.confidence > 0
+                        ? `ضریب اطمینان: ${toPersianDigits(analysisResult.summary.confidence)}٪`
+                        : 'تطبیق هنوز تأیید نشده'}</span>
                     </span>
 
                     <button
@@ -1229,7 +1314,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                   <div className="flex-1 space-y-2 min-w-0">
                     {analysisResult.summary.whatYouSee && (
                       <p className="text-xs text-teal-200 leading-relaxed bg-teal-500/10 border border-teal-500/30 rounded-xl p-2">
-                        <strong>هوش مصنوعی در تصویر می‌بیند: </strong>
+                        <strong>{analysisResult.isAiGenerated ? 'هوش مصنوعی در تصویر می‌بیند: ' : 'وضعیت پیشنهاد: '}</strong>
                         {analysisResult.summary.whatYouSee}
                       </p>
                     )}
@@ -1309,10 +1394,12 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                               : 'bg-amber-400/20 text-amber-300 border border-amber-400/40'
                           }`}
                         >
-                          {analysisResult.summary.catalogAvailability.status === 'confirmed_in_catalog'
-                            ? 'تأیید انطباق قطعی (همونه)'
+                          {!analysisResult.isAiGenerated
+                            ? 'پیشنهادهای بررسی‌نشده — تطبیق قطعی نیست'
+                            : analysisResult.summary.catalogAvailability.status === 'confirmed_in_catalog'
+                            ? analysisResult.summary.exactVisualMatch ? 'تطبیق تصویری دقیق' : 'کد روی قطعه با کاتالوگ تطبیق دارد'
                             : analysisResult.summary.catalogAvailability.status === 'similar_in_catalog'
-                            ? 'مدل جایگزین سازگار (شبیهه)'
+                            ? 'پیشنهادهای بررسی‌نشده'
                             : 'امکان ساخت سفارشی اطلس'}
                         </span>
                       </div>
@@ -1339,7 +1426,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                 </div>
               )}
 
-              {/* Matched Products List — ONLY 100% exact matches appear here */}
+              {/* Exact catalog matches: strict image evidence or an explicitly read part code. */}
               {analysisResult.matchedProducts.length > 0 ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -1348,7 +1435,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                     <span>عین قطعه شما در کاتالوگ پیدا شد ({toPersianDigits(analysisResult.matchedProducts.length)} مورد)</span>
                   </h4>
                   <span className="text-xs text-slate-500">
-                    فقط اقلام با انطباق صددرصدی و تأیید راستی‌آزمایی بصری
+                    انطباق تصویری دقیق یا کد خوانده‌شدهٔ روی قطعه؛ گزینه‌های تأییدنشده جداگانه‌اند
                   </span>
                 </div>
 
@@ -1383,7 +1470,15 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                                 </span>
                                 <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold flex items-center gap-1">
                                   <Zap className="w-3 h-3 text-emerald-600" />
-                                  <span>{toPersianDigits(match.similarityScore)}٪ انطباق</span>
+                                  <span>
+                                    {match.matchBasis === 'recognized_code'
+                                      ? 'کد روی قطعه تطبیق دارد'
+                                      : match.matchBasis === 'catalog_text'
+                                      ? 'پیشنهاد بر اساس مشخصات'
+                                      : match.matchBasis === 'worker'
+                                      ? 'تأیید Worker'
+                                      : `${toPersianDigits(match.similarityScore)}٪ انطباق بصری`}
+                                  </span>
                                 </span>
                                 {match.visualVerdict && (
                                   <span
@@ -1410,6 +1505,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                               <h5 className="font-bold text-sm text-[#55565A] leading-snug mt-1 line-clamp-2">
                                 {match.name}
                               </h5>
+                              {match.brand && <p className="text-[10px] text-slate-500">برند: {match.brand}</p>}
 
                               {((match as any).forzaCode || (catalogItem as any)?.forzaCode) && (
                                 <span className="text-[10px] text-slate-500 font-mono block mt-0.5">
@@ -1486,7 +1582,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                               type="button"
                               onClick={() => {
                                 onClose();
-                                navigate(`/product/${match.code}`);
+                                navigate(match.productUrl || `/product/${encodeURIComponent(match.code)}`);
                               }}
                               className="h-9 px-4 bg-[#55565A] hover:bg-[#1B293E] text-white rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer"
                             >
@@ -1503,13 +1599,15 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
               ) : (analysisResult.similarCandidates?.length || 0) > 0 ? (
                 <div className="space-y-3">
                   {/* ─── TIER 2: «این ...ها را داریم» — closest available items ─── */}
-                  <div className="p-5 rounded-2xl bg-gradient-to-l from-emerald-600 to-teal-600 text-white shadow-md space-y-1.5">
+                  <div className="p-5 rounded-2xl bg-gradient-to-l from-blue-700 to-indigo-600 text-white shadow-md space-y-1.5">
                     <div className="font-black text-base flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5 shrink-0" />
-                      <span>این {partFamilyPlural} را داریم</span>
+                      <Info className="w-5 h-5 shrink-0" />
+                      <span>پیشنهادهای بررسی‌نشده از کاتالوگ</span>
                     </div>
-                    <p className="text-xs text-emerald-50 leading-relaxed">
-                      عینِ قطعه شما در کاتالوگ موجود نیست، اما این {partFamilyPlural} نزدیک‌ترین اقلام کاتالوگ به عکس شما هستند و همین حالا قابل سفارش‌اند:
+                    <p className="text-xs text-blue-50 leading-relaxed">
+                      {analysisResult.isAiGenerated
+                        ? 'این موارد فقط بر اساس شواهد محدود تصویری یا تطبیق مشخصات پیشنهاد شده‌اند؛ عکس کالای کاتالوگ جداگانه تأیید نشده و هیچ‌کدام انطباق قطعی یا سازگاری تضمین‌شده نیستند. پیش از سفارش، کد و ابعاد را بررسی کنید:'
+                        : 'پاسخ هوش مصنوعی نرسید. این موارد پیشنهادهای محلیِ تأییدنشده‌اند؛ هیچ‌کدام به‌عنوان قطعهٔ دقیق یا مشابه قطعی تأیید نشده‌اند. عکس، کد و ابعاد را پیش از سفارش بررسی کنید:'}
                     </p>
                   </div>
 
@@ -1539,12 +1637,24 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                                   </span>
                                   <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black flex items-center gap-1">
                                     <Sparkles className="w-3 h-3" />
-                                    <span>شبیه است — عین قطعه شما نیست</span>
+                                    <span>{analysisResult.isAiGenerated ? 'پیشنهاد بررسی‌نشده — انطباق تأیید نشده' : 'پیشنهاد سریع — قطعهٔ دقیق تأیید نشده'}</span>
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">
+                                    {match.matchBasis === 'visual'
+                                      ? `${toPersianDigits(match.similarityScore)}٪ شباهت بصری`
+                                      : match.matchBasis === 'catalog_text'
+                                      ? 'پیشنهاد بر اساس مشخصات'
+                                      : match.matchBasis === 'fast_visual'
+                                      ? 'نزدیک‌ترین تصویر؛ تأییدنشده'
+                                      : match.matchBasis === 'visual_candidate'
+                                      ? 'گزینهٔ تصویری نزدیک؛ تأییدنشده'
+                                      : 'گزینهٔ مشابه برای بررسی'}
                                   </span>
                                 </div>
                                 <h5 className="font-bold text-sm text-[#55565A] leading-snug mt-1 line-clamp-2">
                                   {match.name}
                                 </h5>
+                                {match.brand && <p className="text-[10px] text-slate-500">برند: {match.brand}</p>}
                                 {((match as any).forzaCode || (catalogItem as any)?.forzaCode) && (
                                   <span className="text-[10px] text-slate-500 font-mono block mt-0.5">
                                     {(match as any).forzaCode || (catalogItem as any)?.forzaCode}
@@ -1552,10 +1662,20 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                                 )}
                               </div>
                             </div>
-                            {match.visualExplanation && (
+                            {match.matchReason && (
                               <p className="text-[11px] text-slate-600 leading-relaxed bg-slate-50 p-2 rounded-xl border border-slate-100">
-                                {match.visualExplanation}
+                                {match.matchReason}
                               </p>
+                            )}
+                            {match.specs?.length > 0 && (
+                              <div className="grid grid-cols-2 gap-1 text-[10px]">
+                                {match.specs.slice(0, 4).map((spec, specIdx) => (
+                                  <div key={specIdx} className="bg-slate-50 px-2 py-1 rounded-md text-slate-600 flex justify-between gap-1">
+                                    <span>{spec.key}:</span>
+                                    <span className="font-mono font-bold text-[#55565A]">{spec.value}</span>
+                                  </div>
+                                ))}
+                              </div>
                             )}
                           </div>
                           <div className="pt-3 border-t border-slate-100 space-y-2.5">
@@ -1582,7 +1702,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                                 type="button"
                                 onClick={() => {
                                   onClose();
-                                  navigate(`/product/${match.code}`);
+                                  navigate(match.productUrl || `/product/${encodeURIComponent(match.code)}`);
                                 }}
                                 className="h-9 px-4 bg-[#55565A] hover:bg-[#1B293E] text-white rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer"
                               >
@@ -1645,9 +1765,9 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                       می‌تونیم براتون بسازیم 🔧
                     </div>
                     <p className="text-xs text-slate-600 leading-relaxed">
-                      هوش مصنوعی اطلس عکس شما را با تمام {toPersianDigits(864)} قلم کالای کاتالوگ مقایسه کرد و
-                      هیچ‌کدام انطباق صددرصدی با قطعه شما نداشت؛ یعنی عین همین قطعه در کاتالوگ فعلی موجود نیست.
-                      اما کارگاه تخصصی هایپر صنعت اطلس توانایی ساخت یا تأمین سفارشی <strong>دقیقاً همین قطعه</strong> را دارد.
+                      جستجوی تصویری و مشخصات فنی، گزینه‌ای با شواهد کافی برای معرفی قطعی پیدا نکرد؛ این نتیجه به‌تنهایی ثابت نمی‌کند
+                      قطعه در کاتالوگ نیست. کارشناس می‌تواند با بررسی ابعاد و کاربرد، کالای مناسب را از کاتالوگ تأیید کند یا
+                      در صورت نیاز ساخت/تأمین سفارشی را پیگیری کند.
                     </p>
                     <p className="text-[11px] text-slate-500 leading-relaxed">
                       کافیست همین عکس را برای کارشناسان ما ارسال کنید تا شناسایی دقیق، استعلام قیمت و زمان ساخت اعلام شود.
@@ -1702,7 +1822,7 @@ export const AiVisualPartSearchModal: React.FC<Props> = ({ isOpen, onClose }) =>
                   {showSimilar && (
                     <div className="pt-2 border-t border-amber-200 space-y-2">
                       <p className="text-[11px] text-amber-800 leading-relaxed">
-                        این اقلام از نظر ظاهری نزدیک‌ترین‌ها به عکس شما بودند، اما راستی‌آزمایی چشمی هوش مصنوعی تأیید نکرد که عین قطعه شما باشند؛ صرفاً به‌عنوان مرجع نمایش داده می‌شوند:
+                        این گزینه‌ها براساس تحلیل تصویر و مشخصات فنی شناسایی‌شده پیشنهاد شده‌اند؛ هوش مصنوعی عین‌بودن آن‌ها را تأیید نکرده است:
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {analysisResult.similarCandidates.map((rej, rIdx) => {

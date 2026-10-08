@@ -11,6 +11,14 @@ export type AiAnalysisStage = 'quick' | 'refined';
 export interface AiPartAnalysisRequest {
   imageBase64?: string;
   mimeType?: string;
+  fileName?: string;
+  retryUpload?: {
+    imageName: string;
+    imageUrl: string;
+    githubUrl?: string;
+    commitUrl?: string;
+    retryReceipt: string;
+  };
   length?: number;
   width?: number;
   pitch?: number;
@@ -45,6 +53,7 @@ export interface MatchedPartItem {
   brand: string;
   type: string;
   similarityScore: number;
+  matchBasis?: 'visual' | 'visual_candidate' | 'worker' | 'recognized_code' | 'catalog_text' | 'fast_visual';
   matchReason: string;
   distinction?: string;
   specs: { key: string; value: string }[];
@@ -60,6 +69,8 @@ export interface MatchedPartItem {
   forzaCode?: string;
   cataloguePage?: number;
   image?: string;
+  imageUrl?: string;
+  productUrl?: string;
 }
 
 export interface AiPartAnalysisResult {
@@ -86,6 +97,13 @@ export interface AiPartAnalysisResult {
   technicalAdvice: string;
   fallbackNotice?: string;
   aiError?: string;
+  uploadedImage?: {
+    imageName: string;
+    imageUrl: string;
+    githubUrl?: string;
+    commitUrl?: string;
+    retryReceipt?: string;
+  };
 }
 
 // Sample industrial presets for one-click testing (real catalog products)
@@ -145,32 +163,74 @@ export const INDUSTRIAL_PRESET_SAMPLES: IndustrialPresetSample[] = [
   },
 ];
 
+async function readApiJson(response: Response): Promise<any> {
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || '';
+  const isJson = contentType === 'application/json' || contentType.endsWith('+json');
+  if (!isJson) {
+    throw new Error(
+      `پاسخ سرویس شناسایی تصویر JSON نیست (HTTP ${response.status}${contentType ? `، ${contentType}` : ''}). آدرس API یا نسخهٔ مستقرشدهٔ سرور را بررسی کنید.`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`پاسخ سرویس شناسایی تصویر JSON معتبر نیست (HTTP ${response.status}).`);
+  }
+}
+
 export const aiVisualSearchService = {
   async analyzePartWithAi(request: AiPartAnalysisRequest): Promise<AiPartAnalysisResult> {
-    // If the image is a URL (preset sample), convert it to base64 first
-    // so the AI always receives real pixel data.
-    let { imageBase64, mimeType } = request;
+    // Preset images are downloaded by the browser so the backend can validate
+    // and upload them to the user's GitHub repo. The AI Worker receives only
+    // the committed public URL, never these Base64 bytes.
+    let { imageBase64, mimeType, fileName } = request;
     if (imageBase64 && /^https?:\/\//i.test(imageBase64.trim())) {
-      const converted = await this.urlToBase64(imageBase64.trim());
+      const sourceUrl = imageBase64.trim();
+      const converted = await this.urlToBase64(sourceUrl);
       imageBase64 = converted.base64;
       mimeType = converted.mimeType;
+      fileName = fileName || decodeURIComponent(new URL(sourceUrl).pathname.split('/').pop() || 'sample-image.png');
     }
 
     assertBackendConfigured();
 
-    const response = await fetch(apiUrl('/api/ai/analyze-part'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ...request, imageBase64, mimeType }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`خطای ارتباط با سرور هوش مصنوعی: کد ${response.status}`);
+    let response: Response;
+    const controller = new AbortController();
+    const requestTimeout = window.setTimeout(() => controller.abort(), 35000);
+    try {
+      response = await fetch(apiUrl('/api/ai/analyze-part'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...request, imageBase64, mimeType, fileName: fileName || 'image' }),
+        signal: controller.signal,
+      });
+    } catch {
+      if (controller.signal.aborted) {
+        throw new Error('پاسخی از سرور شناسایی تصویر در ۳۵ ثانیه دریافت نشد؛ دوباره تلاش کنید یا بعداً تصویر را بفرستید.');
+      }
+      throw new Error('ارتباط با سرور شناسایی تصویر برقرار نشد؛ اتصال اینترنت را بررسی و دوباره تلاش کنید.');
+    } finally {
+      window.clearTimeout(requestTimeout);
     }
 
-    const data: AiPartAnalysisResult = await response.json();
+    const responseData = await readApiJson(response);
+
+    if (!response.ok) {
+      const errorData = responseData;
+      const requestError = new Error(
+        errorData?.error || errorData?.message || `خطای ارتباط با سرور هوش مصنوعی: کد ${response.status}`
+      ) as Error & { uploadedImage?: AiPartAnalysisResult['uploadedImage']; retryable?: boolean; stage?: string };
+      requestError.uploadedImage = errorData?.uploadedImage;
+      requestError.retryable = Boolean(errorData?.retryable);
+      requestError.stage = errorData?.stage;
+      throw requestError;
+    }
+
+    const data = responseData as AiPartAnalysisResult;
+    if (!data || data.success !== true || !data.summary || !Array.isArray(data.matchedProducts)) {
+      throw new Error('پاسخ سرور شناسایی تصویر ساختار معتبری ندارد؛ لطفاً دوباره تلاش کنید.');
+    }
 
     // Enrich matched products with full catalog objects
     const allProducts = generateMockProducts();

@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log*
+.git
+dist
+build
+coverage
+src/assets/images/mobile
+src/assets/imagesproducts/mobile
+.env*
+.DS_Store
